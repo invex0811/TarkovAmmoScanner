@@ -14,6 +14,17 @@ def app_data_dir() -> Path:
     return path
 
 
+def project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def local_tessdata_dir() -> Path:
+    explicit = os.environ.get("TARKOV_AMMO_TESSDATA")
+    if explicit:
+        return Path(explicit)
+    return project_root() / "local-data" / "tessdata"
+
+
 def cache_file() -> Path:
     path = app_data_dir() / "cache" / "ammo_ru.json"
     path.parent.mkdir(parents=True, exist_ok=True)
