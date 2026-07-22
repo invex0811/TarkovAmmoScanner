@@ -25,9 +25,9 @@ class ScreenCaptureService:
 
     def capture_title_near_cursor(self) -> tuple[Image.Image, CursorPosition]:
         position = self.cursor_position()
-        # The cursor should be on the inspection magnifier or at the beginning
-        # of the title. Keep the strip narrow enough to exclude item quantities
-        # and neighbouring inventory labels that previously polluted OCR.
+        # The cursor should be on the inspection magnifier or near the beginning
+        # of the title. The strip is wide enough for long translated ammo names
+        # while remaining short enough to avoid most inventory rows.
         left = max(0, position.x - 30)
         top = max(0, position.y - 34)
         width = 650
@@ -43,19 +43,30 @@ class ScreenCaptureService:
 
 
 def preprocess_for_ocr(image: Image.Image) -> list[Image.Image]:
-    gray = ImageOps.grayscale(image)
-    gray = ImageOps.autocontrast(gray, cutoff=1)
-    gray = ImageEnhance.Contrast(gray).enhance(2.2)
-    gray = gray.resize((gray.width * 3, gray.height * 3), Image.Resampling.LANCZOS)
-    gray = gray.filter(ImageFilter.SHARPEN)
+    # The Tarkov title is normally either at the top of this capture or close to
+    # its vertical middle, depending on whether the cursor is on the magnifier
+    # or directly on the text. Process both narrow line bands before the full
+    # screenshot so Tesseract is not distracted by item icons and quantities.
+    width, height = image.size
+    top_band = image.crop((0, 0, width, min(height, 34)))
 
-    # Multiple variants work better across different UI brightness and scaling.
-    binary_125 = gray.point(lambda value: 255 if value > 125 else 0)
-    binary_150 = gray.point(lambda value: 255 if value > 150 else 0)
-    binary_175 = gray.point(lambda value: 255 if value > 175 else 0)
-    return [
-        gray,
-        binary_125,
-        binary_150,
-        ImageOps.invert(binary_175),
-    ]
+    middle_top = max(0, height // 2 - 18)
+    middle_bottom = min(height, middle_top + 36)
+    middle_band = image.crop((0, middle_top, width, middle_bottom))
+
+    variants: list[Image.Image] = []
+    for source, thresholds in (
+        (top_band, (125, 155)),
+        (middle_band, (135,)),
+        (image, (150,)),
+    ):
+        gray = ImageOps.grayscale(source)
+        gray = ImageOps.autocontrast(gray, cutoff=1)
+        gray = ImageEnhance.Contrast(gray).enhance(2.3)
+        gray = gray.resize((gray.width * 4, gray.height * 4), Image.Resampling.LANCZOS)
+        gray = gray.filter(ImageFilter.SHARPEN)
+        variants.append(gray)
+        for threshold in thresholds:
+            variants.append(gray.point(lambda value, limit=threshold: 255 if value > limit else 0))
+
+    return variants
