@@ -87,8 +87,17 @@ class ScannerApplication:
                 result = match_ammo(text, self.repository.items)
                 if result is None:
                     raise RuntimeError("OCR не вернул подходящее название")
-                if result.score < 58:
-                    raise RuntimeError(f"Низкая уверенность {result.score:.0f}%: {text!r}")
+                if result.score < 72:
+                    raise RuntimeError(
+                        f"Низкая уверенность {result.score:.0f}%: {text!r}"
+                    )
+                if result.margin < 6:
+                    raise RuntimeError(
+                        "Неоднозначное распознавание: "
+                        f"лучший результат {result.ammo.short_name} "
+                        f"({result.score:.0f}%, отрыв {result.margin:.0f}%). "
+                        "Наведите курсор ближе к началу названия и повторите."
+                    )
                 self.bridge.scan_complete.emit(
                     result.ammo,
                     position.x,
