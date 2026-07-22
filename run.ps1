@@ -1,8 +1,10 @@
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
-    Write-Host "Виртуальное окружение не найдено. Сначала запустите .\scripts\setup.ps1" -ForegroundColor Yellow
+$venvPython = ".\.venv\Scripts\python.exe"
+
+if (-not (Test-Path -LiteralPath $venvPython)) {
+    Write-Host "Virtual environment was not found. Run .\scripts\setup.ps1 first." -ForegroundColor Yellow
     exit 1
 }
 
-& ".\.venv\Scripts\python.exe" -m tarkov_ammo_scanner
+& $venvPython -m tarkov_ammo_scanner
