@@ -8,6 +8,7 @@ import pytesseract
 from PIL import Image
 
 from tarkov_ammo_scanner.capture import preprocess_for_ocr
+from tarkov_ammo_scanner.paths import local_tessdata_dir
 
 
 class OcrUnavailableError(RuntimeError):
@@ -17,24 +18,27 @@ class OcrUnavailableError(RuntimeError):
 class OcrService:
     def __init__(self) -> None:
         self.executable = self._find_tesseract()
+        self.tessdata_dir = self._find_tessdata_dir()
         if self.executable:
             pytesseract.pytesseract.tesseract_cmd = self.executable
 
     @property
     def available(self) -> bool:
-        return bool(self.executable)
+        return bool(self.executable and self.tessdata_dir)
 
     def languages(self) -> list[str]:
         if not self.available:
             return []
         try:
-            return sorted(pytesseract.get_languages(config=""))
+            return sorted(pytesseract.get_languages(config=self._tessdata_config()))
         except pytesseract.TesseractError:
             return []
 
     def recognize(self, image: Image.Image) -> str:
-        if not self.available:
+        if not self.executable:
             raise OcrUnavailableError("Tesseract OCR не найден")
+        if not self.tessdata_dir:
+            raise OcrUnavailableError("Модели Tesseract не найдены. Запустите scripts\\setup.ps1")
 
         available_languages = set(self.languages())
         language = "rus+eng" if "rus" in available_languages and "eng" in available_languages else "eng"
@@ -47,7 +51,7 @@ class OcrService:
                 text = pytesseract.image_to_string(
                     variant,
                     lang=language,
-                    config=f"--oem 3 --psm {psm}",
+                    config=f'{self._tessdata_config()} --oem 3 --psm {psm}',
                     timeout=8,
                 ).strip()
                 if text:
@@ -58,6 +62,27 @@ class OcrService:
         # Longer OCR output usually contains the complete inspection title;
         # the fuzzy matcher is robust to surrounding UI text.
         return max(texts, key=lambda text: (len(text), text.count(" ")))
+
+    def _tessdata_config(self) -> str:
+        return f'--tessdata-dir "{self.tessdata_dir}"'
+
+    def _find_tessdata_dir(self) -> Path | None:
+        candidates: list[Path] = [local_tessdata_dir()]
+        if self.executable:
+            candidates.append(Path(self.executable).parent / "tessdata")
+
+        best: Path | None = None
+        best_score = -1
+        for candidate in candidates:
+            if not candidate.is_dir():
+                continue
+            score = int((candidate / "eng.traineddata").is_file())
+            score += int((candidate / "rus.traineddata").is_file())
+            if score > best_score:
+                best = candidate
+                best_score = score
+
+        return best if best_score > 0 else None
 
     @staticmethod
     def _find_tesseract() -> str | None:
