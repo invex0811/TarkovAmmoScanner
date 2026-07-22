@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -14,6 +15,19 @@ from tarkov_ammo_scanner.paths import local_tessdata_dir
 
 class OcrUnavailableError(RuntimeError):
     pass
+
+
+_OCR_CONFUSABLES = str.maketrans(
+    {
+        "o": "0",
+        "q": "0",
+        "s": "5",
+        "i": "1",
+        "l": "1",
+        "e": "8",
+        "b": "8",
+    }
+)
 
 
 class OcrService:
@@ -61,11 +75,16 @@ class OcrService:
 
         texts: list[str] = []
         for variant in preprocess_for_ocr(image):
-            for psm in (7, 6, 11):
+            # Inspection names are single lines. PSM 7 is the primary mode;
+            # PSM 6 remains as a fallback for slightly misaligned captures.
+            for psm in (7, 6):
                 text = pytesseract.image_to_string(
                     variant,
                     lang=language,
-                    config=f"{self._tessdata_config()} --oem 3 --psm {psm}",
+                    config=(
+                        f"{self._tessdata_config()} --oem 3 --psm {psm} "
+                        "-c preserve_interword_spaces=1"
+                    ),
                     timeout=8,
                 ).strip()
                 if text:
@@ -74,9 +93,10 @@ class OcrService:
         if not texts:
             return ""
 
-        # Longer OCR output usually contains the complete inspection title;
-        # the fuzzy matcher is robust to surrounding UI text.
-        return max(texts, key=lambda text: (len(text), text.count(" ")))
+        # Do not select the longest result: a long inventory row can contain far
+        # more OCR garbage than a clean ammo title. Prefer caliber/designation
+        # structure and use compactness only as a tie breaker.
+        return max(texts, key=lambda text: (_ocr_text_quality(text), -len(text)))
 
     def _tessdata_config(self) -> str:
         if not self.tessdata_dir:
@@ -132,3 +152,26 @@ class OcrService:
             if candidate and Path(candidate).is_file():
                 return str(Path(candidate))
         return None
+
+
+def _ocr_text_quality(text: str) -> float:
+    normalized = text.casefold().replace("×", "x").replace("х", "x")
+    corrected = normalized.translate(_OCR_CONFUSABLES)
+    forms = (normalized, corrected)
+
+    score = 0.0
+    if any(re.search(r"\d[.,]?\d{1,2}\s*x\s*\d{2,3}", form) for form in forms):
+        score += 120.0
+    if any(re.search(r"\bm\s*[0-9oqlisb]{2,3}\b", form) for form in forms):
+        score += 75.0
+    if "tracer" in normalized or "трасс" in normalized:
+        score += 20.0
+
+    alnum_count = sum(character.isalnum() for character in text)
+    punctuation_count = sum(
+        not character.isalnum() and not character.isspace() for character in text
+    )
+    score += min(alnum_count, 40) * 0.5
+    score -= punctuation_count * 1.5
+    score -= max(0, len(text) - 70) * 0.8
+    return score
