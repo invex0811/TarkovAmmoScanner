@@ -35,3 +35,15 @@ def debug_image_file() -> Path:
     path = app_data_dir() / "debug" / "last_scan.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def diagnostics_dir() -> Path:
+    path = app_data_dir() / "logs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def scan_log_file() -> Path:
+    path = diagnostics_dir() / "scans.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path

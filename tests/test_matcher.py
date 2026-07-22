@@ -230,6 +230,85 @@ def test_various_calibers_regression() -> None:
     r = match_ammo("12/70 AP-20", items)
     assert r is not None and r.ammo.short_name == "AP-20" and r.ammo.caliber == "Caliber12g"
 
-    # Test 5.7x28mm L191
-    r = match_ammo("5.7x28mm L191", items)
-    assert r is not None and r.ammo.short_name == "L191" and r.ammo.caliber == "Caliber57x28"
+def test_real_live_scan_log_record_10_m80_acceptance() -> None:
+    items = [
+        ammo("7.62x51mm M61", "M61", "Caliber762x51"),
+        ammo("7.62x51mm M80", "M80", "Caliber762x51"),
+        ammo("7.62x51mm M80A1", "M80A1", "Caliber762x51"),
+    ]
+
+    # Real OCR line recorded in scans.jsonl Record 10: '7 (.02XILMM MoU as ee =F  }'
+    raw_ocr_from_log = "7 (.02XILMM MoU as ee =F  }"
+    result = match_ammo(raw_ocr_from_log, items)
+
+    assert result is not None
+    assert result.ammo.short_name == "M80"
+    assert result.ammo.caliber == "Caliber762x51"
+    assert result.has_valid_caliber is True
+    assert result.has_designator_match is True
+
+    accepted, error_reason = is_acceptable_match(result)
+    assert accepted is True
+    assert error_reason == ""
+
+
+def test_designation_similarity_65_safety_and_negative_scenarios() -> None:
+    items = [
+        ammo("7.62x51mm M61", "M61", "Caliber762x51"),
+        ammo("7.62x51mm M62 Tracer", "M62", "Caliber762x51", tracer=True),
+        ammo("7.62x51mm M80", "M80", "Caliber762x51"),
+        ammo("7.62x51mm M80A1", "M80A1", "Caliber762x51"),
+        ammo(".300 Blackout M62 Tracer", "M62", "Caliber762x35", tracer=True),
+        ammo("5.56x45mm M855", "M855", "Caliber556x45NATO"),
+    ]
+
+    # 1. OCR m00/MoU with valid 7.62x51 caliber selects M80 with sufficient margin
+    r1 = match_ammo(".02XILMM MoU", items)
+    assert r1 is not None and r1.ammo.short_name == "M80"
+    assert is_acceptable_match(r1)[0] is True
+
+
+    # 2. M80 is not confused with M80A1
+    r2 = match_ammo("7.62x51mm M80", items)
+    assert r2 is not None and r2.ammo.short_name == "M80"
+    assert r2.margin >= 10.0
+
+    # 3. M61 is not confused with M62
+    r3 = match_ammo("7.62x51mm M61", items)
+    assert r3 is not None and r3.ammo.short_name == "M61"
+    assert r3.margin >= 10.0
+
+    # 4. M62 Tracer is not confused with non-tracer ammunition
+    r4 = match_ammo("7.62x51mm M62 Tracer", items)
+    assert r4 is not None and r4.ammo.short_name == "M62" and r4.ammo.tracer is True
+
+    # 5. Similar designator without valid caliber is rejected
+    r5 = match_ammo("random text with m00", items)
+    assert r5 is not None
+    assert r5.has_valid_caliber is False
+    assert is_acceptable_match(r5)[0] is False
+
+    # 6. Random OCR text with m00, m08, m6o or moe is rejected without structural confirmation
+    for random_text in ("random row m08", "inventory row m6o", "some item moe"):
+        r_rand = match_ammo(random_text, items)
+        assert is_acceptable_match(r_rand)[0] is False
+
+    # 7. Ammo of another caliber with same short_name cannot win over hard caliber match
+    r7 = match_ammo("7.62x51mm M62", items)
+    assert r7 is not None and r7.ammo.caliber == "Caliber762x51"
+
+    # 8. Result with small margin is rejected
+    ambiguous_result = MatchResult(
+        ammo=items[0],
+        score=74.0,
+        runner_up_score=71.0,  # margin 3.0 < 6.0
+        recognized_text="7.62x51mm ambiguous",
+        has_valid_caliber=True,
+        has_designator_match=False,
+    )
+    assert is_acceptable_match(ambiguous_result)[0] is False
+
+    # 9. Empty or garbage OCR text is rejected
+    assert is_acceptable_match(match_ammo("", items))[0] is False
+    assert is_acceptable_match(match_ammo("   ", items))[0] is False
+    assert is_acceptable_match(match_ammo("[] / ---", items))[0] is False

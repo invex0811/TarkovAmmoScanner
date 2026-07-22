@@ -8,8 +8,13 @@ from PySide6.QtWidgets import QApplication
 
 from tarkov_ammo_scanner.api import AmmoRepository, demo_ammo
 from tarkov_ammo_scanner.capture import ScreenCaptureService
+from tarkov_ammo_scanner.diagnostics import (
+    format_structured_features,
+    log_scan_result,
+    open_diagnostics_folder,
+)
 from tarkov_ammo_scanner.hotkeys import GlobalHotkeyService
-from tarkov_ammo_scanner.matcher import is_acceptable_match, match_ammo
+from tarkov_ammo_scanner.matcher import match_ammo
 from tarkov_ammo_scanner.ocr import OcrService
 from tarkov_ammo_scanner.ui.main_window import MainWindow
 from tarkov_ammo_scanner.ui.overlay import OverlayWindow
@@ -20,8 +25,8 @@ class Bridge(QObject):
     demo_requested = Signal()
     refresh_requested = Signal()
     database_ready = Signal(int, str)
-    scan_complete = Signal(object, int, int, float, str)
-    scan_failed = Signal(str)
+    scan_complete = Signal(object, int, int, float, str, str)
+    scan_failed = Signal(str, str)
 
 
 class ScannerApplication:
@@ -39,6 +44,7 @@ class ScannerApplication:
             on_refresh=self.bridge.refresh_requested.emit,
             on_demo=self.bridge.demo_requested.emit,
             on_scan=self.bridge.scan_requested.emit,
+            on_open_diagnostics=open_diagnostics_folder,
         )
 
         self.bridge.scan_requested.connect(self.scan)
@@ -72,24 +78,34 @@ class ScannerApplication:
 
     def scan(self) -> None:
         if not self.ocr.available:
-            self.bridge.scan_failed.emit("Tesseract OCR не найден. Запустите scripts\\setup.ps1")
+            self.bridge.scan_failed.emit(
+                "Tesseract OCR не найден. Запустите scripts\\setup.ps1",
+                "Признаки: OCR недоступен",
+            )
             return
         if not self.repository.items:
-            self.bridge.scan_failed.emit("База патронов ещё не загружена")
+            self.bridge.scan_failed.emit(
+                "База патронов ещё не загружена",
+                "Признаки: база не готова",
+            )
             return
 
         # Do not let a previous result card become part of the next screenshot.
         self.overlay.hide()
         self.window.set_last_scan("Последнее сканирование: обработка снимка...")
+        self.window.set_structured_features("Признаки: обработка снимка...")
 
         def worker() -> None:
             try:
                 image, position = self.capture.capture_title_near_cursor()
                 text = self.ocr.recognize(image)
                 result = match_ammo(text, self.repository.items)
-                acceptable, error_message = is_acceptable_match(result)
-                if not acceptable:
-                    raise RuntimeError(error_message)
+                record = log_scan_result(result, raw_ocr_text=text)
+                features_str = format_structured_features(result)
+
+                if not record.accepted:
+                    self.bridge.scan_failed.emit(record.rejection_reason, features_str)
+                    return
 
                 assert result is not None
                 self.bridge.scan_complete.emit(
@@ -98,10 +114,11 @@ class ScannerApplication:
                     position.y,
                     result.score,
                     result.recognized_text,
+                    features_str,
                 )
             except Exception as exc:
-                self.bridge.scan_failed.emit(str(exc))
-
+                log_scan_result(None, raw_ocr_text=str(exc))
+                self.bridge.scan_failed.emit(str(exc), "Признаки: ошибка сканирования")
 
         self.executor.submit(worker)
 
@@ -110,6 +127,9 @@ class ScannerApplication:
         position = self.capture.cursor_position()
         self.overlay.show_ammo(ammo, position.x, position.y)
         self.window.set_last_scan(f"Тестовая карточка: {ammo.short_name}")
+        self.window.set_structured_features(
+            "Признаки: демонстрационный режим (тестовые данные)", ok=True
+        )
 
     def _database_ready(self, count: int, error: str) -> None:
         if error:
@@ -120,15 +140,19 @@ class ScannerApplication:
         else:
             self.window.set_database_status(f"База патронов: загружено {count}", ok=True)
 
-    def _scan_complete(self, ammo: object, x: int, y: int, score: float, text: str) -> None:
+    def _scan_complete(
+        self, ammo: object, x: int, y: int, score: float, text: str, features: str
+    ) -> None:
         self.overlay.show_ammo(ammo, x, y)
         recognized = " ".join(text.split())
         self.window.set_last_scan(
             f"Распознано: {ammo.short_name} · уверенность {score:.0f}% · OCR: {recognized[:90]}"
         )
+        self.window.set_structured_features(features, ok=True)
 
-    def _scan_failed(self, message: str) -> None:
+    def _scan_failed(self, message: str, features: str = "Признаки: ошибка сканирования") -> None:
         self.window.set_last_scan(f"Ошибка сканирования: {message}", ok=False)
+        self.window.set_structured_features(features, ok=False)
 
     def _update_ocr_status(self) -> None:
         if not self.ocr.available:

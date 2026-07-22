@@ -39,7 +39,7 @@ def is_acceptable_match(result: MatchResult | None) -> tuple[bool, str]:
         result.has_valid_caliber
         and result.has_designator_match
         and result.score >= 50.0
-        and result.margin >= 8.0
+        and result.margin >= 6.0
     ):
         return True, ""
 
@@ -75,6 +75,7 @@ _OCR_CONFUSABLES = str.maketrans(
     {
         "o": "0",
         "q": "0",
+        "u": "0",
         "s": "5",
         "i": "1",
         "l": "1",
@@ -144,7 +145,7 @@ def match_ammo(text: str, items: list[Ammo] | tuple[Ammo, ...]) -> MatchResult |
 
     has_valid_caliber = bool(query_caliber and query_caliber == best_caliber)
     has_designator_match = bool(query_designators & best_designators) or (
-        _designation_similarity(query_designators, best_designators) >= 70.0
+        _designation_similarity(query_designators, best_designators) >= 65.0
     )
     tracer_conflict = bool(query_tracer and not best_ammo.tracer)
 
@@ -157,6 +158,7 @@ def match_ammo(text: str, items: list[Ammo] | tuple[Ammo, ...]) -> MatchResult |
         has_designator_match=has_designator_match,
         tracer_conflict=tracer_conflict,
     )
+
 
 
 
@@ -291,7 +293,15 @@ def _designation_similarity(query: set[str], candidate: set[str]) -> float:
         return 0.0
     if query & candidate:
         return 100.0
-    return max(float(fuzz.ratio(left, right)) for left in query for right in candidate)
+
+    valid_pairs = [
+        float(fuzz.ratio(left, right))
+        for left in query
+        for right in candidate
+        if len(left) >= 3 and len(right) >= 3
+    ]
+    return max(valid_pairs) if valid_pairs else 0.0
+
 
 
 def _mentions_tracer(text: str) -> bool:
@@ -303,11 +313,14 @@ def _query_caliber_signature(query: str) -> str:
     norm = normalize(query)
     for form in (norm, norm.translate(_OCR_CONFUSABLES)):
         # Robust caliber recognition accounting for common Tesseract artifacts
-        if re.search(r"(?<!\d)(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6|0ex[is1]?1?)\s*x\s*51(?!\d)", form):
+        if re.search(
+            r"(?<!\d)\.?(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6|0e|c0c|02|06)\s*x\s*(?:51|i1|il|11|1l|s1|5l|514)(?!\d)",
+            form,
+        ):
             return "76251"
-        if re.search(r"(?<!\d)(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6)\s*x\s*39(?!\d)", form):
+        if re.search(r"(?<!\d)\.?(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6)\s*x\s*39(?!\d)", form):
             return "76239"
-        if re.search(r"(?<!\d)(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6)\s*x\s*54(?!\d)", form):
+        if re.search(r"(?<!\d)\.?(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6)\s*x\s*54(?!\d)", form):
             return "76254"
         if re.search(r"(?<!\d)5[.,]?45\s*x\s*39(?!\d)", form):
             return "54539"

@@ -19,11 +19,12 @@ class MainWindow(QMainWindow):
         on_refresh: Callable[[], None],
         on_demo: Callable[[], None],
         on_scan: Callable[[], None],
+        on_open_diagnostics: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("Tarkov Ammo Scanner")
-        self.setMinimumSize(520, 350)
-        self.resize(590, 375)
+        self.setMinimumSize(560, 410)
+        self.resize(630, 430)
 
         central = QWidget()
         central.setStyleSheet("background: #202020; color: #eeeeee;")
@@ -56,11 +57,13 @@ class MainWindow(QMainWindow):
         self.ocr_status = QLabel("OCR: проверка...")
         self.hotkey_status = QLabel("Горячие клавиши: регистрация...")
         self.last_scan_status = QLabel("Последнее сканирование: ещё не запускалось")
+        self.structured_features = QLabel("Признаки: ещё не определялись")
         for label in (
             self.database_status,
             self.ocr_status,
             self.hotkey_status,
             self.last_scan_status,
+            self.structured_features,
         ):
             label.setStyleSheet("font-size: 13px; border: none; background: transparent;")
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -71,22 +74,27 @@ class MainWindow(QMainWindow):
         buttons.setSpacing(10)
         refresh = QPushButton("Обновить базу")
         demo = QPushButton("Показать тест")
-        scan = QPushButton("Сканировать сейчас")
-        for button in (refresh, demo, scan):
+        scan = QPushButton("Сканировать")
+        diagnostics = QPushButton("Папка диагностики")
+        for button in (refresh, demo, scan, diagnostics):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setMinimumHeight(38)
             button.setStyleSheet(
                 "QPushButton { background: #333333; border: 1px solid #505050; border-radius: 5px; "
-                "padding: 7px 13px; color: #f1f1f1; }"
+                "padding: 7px 11px; color: #f1f1f1; font-size: 12px; }"
                 "QPushButton:hover { background: #414141; border-color: #ffad46; }"
                 "QPushButton:pressed { background: #272727; }"
             )
         refresh.clicked.connect(on_refresh)
         demo.clicked.connect(on_demo)
         scan.clicked.connect(on_scan)
+        if on_open_diagnostics:
+            diagnostics.clicked.connect(on_open_diagnostics)
+
         buttons.addWidget(refresh)
         buttons.addWidget(demo)
         buttons.addWidget(scan)
+        buttons.addWidget(diagnostics)
         layout.addLayout(buttons)
         layout.addStretch(1)
 
@@ -120,4 +128,10 @@ class MainWindow(QMainWindow):
         self.last_scan_status.setText(text)
         self.last_scan_status.setStyleSheet(
             f"font-size: 13px; border: none; background: transparent; color: {'#dedede' if ok else '#e18d75'};"
+        )
+
+    def set_structured_features(self, text: str, ok: bool = True) -> None:
+        self.structured_features.setText(text)
+        self.structured_features.setStyleSheet(
+            f"font-size: 12px; border: none; background: transparent; color: {'#a0cfa0' if ok else '#dca0a0'};"
         )
