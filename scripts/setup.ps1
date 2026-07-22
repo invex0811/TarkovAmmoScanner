@@ -11,28 +11,48 @@ function Find-Tesseract {
     )
 
     foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path $candidate)) { return $candidate }
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return $candidate
+        }
     }
 
     return $null
 }
 
-if (-not (Get-Command py.exe -ErrorAction SilentlyContinue) -and -not (Get-Command python.exe -ErrorAction SilentlyContinue)) {
-    throw "Python 3.11+ не найден. Установите Python с python.org или через winget."
+$python = $null
+if (Get-Command py.exe -ErrorAction SilentlyContinue) {
+    $python = "py"
+} elseif (Get-Command python.exe -ErrorAction SilentlyContinue) {
+    $python = "python"
 }
 
-$python = if (Get-Command py.exe -ErrorAction SilentlyContinue) { "py" } else { "python" }
+if (-not $python) {
+    throw "Python 3.11 or newer was not found. Install Python and run this script again."
+}
 
-if (-not (Test-Path ".\.venv")) {
+Write-Host "Using Python:" -ForegroundColor Cyan
+& $python --version
+
+if (-not (Test-Path -LiteralPath ".\.venv\Scripts\python.exe")) {
+    Write-Host "Creating virtual environment..." -ForegroundColor Cyan
     & $python -m venv .venv
 }
 
-& ".\.venv\Scripts\python.exe" -m pip install --upgrade pip
-& ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
+$venvPython = ".\.venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $venvPython)) {
+    throw "Virtual environment creation failed: $venvPython was not created."
+}
+
+Write-Host "Upgrading pip..." -ForegroundColor Cyan
+& $venvPython -m pip install --upgrade pip
+
+Write-Host "Installing project dependencies..." -ForegroundColor Cyan
+& $venvPython -m pip install -r requirements.txt
 
 $tesseract = Find-Tesseract
 if (-not $tesseract) {
-    Write-Host "Tesseract не найден. Пробую установить через winget..." -ForegroundColor Yellow
+    Write-Host "Tesseract was not found. Trying to install it with winget..." -ForegroundColor Yellow
+
     if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
         winget install --id UB-Mannheim.TesseractOCR --exact --accept-package-agreements --accept-source-agreements
         $tesseract = Find-Tesseract
@@ -44,16 +64,18 @@ if ($tesseract) {
 
     $tessdata = Join-Path (Split-Path $tesseract) "tessdata"
     $rus = Join-Path $tessdata "rus.traineddata"
-    if (-not (Test-Path $rus)) {
-        Write-Host "Русская модель OCR не найдена. Загружаю rus.traineddata..." -ForegroundColor Yellow
+
+    if (-not (Test-Path -LiteralPath $rus)) {
+        Write-Host "Downloading the Russian OCR model..." -ForegroundColor Yellow
         New-Item -ItemType Directory -Force -Path $tessdata | Out-Null
         Invoke-WebRequest `
             -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/rus.traineddata" `
             -OutFile $rus
     }
 } else {
-    Write-Host "Tesseract автоматически установить не удалось." -ForegroundColor Red
-    Write-Host "Установите его вручную: winget install --id UB-Mannheim.TesseractOCR --exact"
+    Write-Host "Tesseract could not be installed automatically." -ForegroundColor Red
+    Write-Host "Install it manually with:" -ForegroundColor Yellow
+    Write-Host "winget install --id UB-Mannheim.TesseractOCR --exact"
 }
 
-Write-Host "Готово. Запуск: .\run.ps1" -ForegroundColor Green
+Write-Host "Setup complete. Start the app with: .\run.ps1" -ForegroundColor Green
