@@ -25,12 +25,13 @@ class ScreenCaptureService:
 
     def capture_title_near_cursor(self) -> tuple[Image.Image, CursorPosition]:
         position = self.cursor_position()
-        # The cursor is expected to be on the inspection magnifier or at the
-        # beginning of the title. Capture mainly to the right, as Tarkov does.
+        # The cursor should be on the inspection magnifier or at the beginning
+        # of the title. Keep the strip narrow enough to exclude item quantities
+        # and neighbouring inventory labels that previously polluted OCR.
         left = max(0, position.x - 30)
-        top = max(0, position.y - 38)
-        width = 930
-        height = 110
+        top = max(0, position.y - 34)
+        width = 650
+        height = 76
 
         with mss.mss() as screen:
             monitor = {"left": left, "top": top, "width": width, "height": height}
@@ -48,7 +49,13 @@ def preprocess_for_ocr(image: Image.Image) -> list[Image.Image]:
     gray = gray.resize((gray.width * 3, gray.height * 3), Image.Resampling.LANCZOS)
     gray = gray.filter(ImageFilter.SHARPEN)
 
-    # Two variants work better across different UI brightness and scaling.
-    binary_135 = gray.point(lambda value: 255 if value > 135 else 0)
-    binary_165 = gray.point(lambda value: 255 if value > 165 else 0)
-    return [gray, binary_135, ImageOps.invert(binary_165)]
+    # Multiple variants work better across different UI brightness and scaling.
+    binary_125 = gray.point(lambda value: 255 if value > 125 else 0)
+    binary_150 = gray.point(lambda value: 255 if value > 150 else 0)
+    binary_175 = gray.point(lambda value: 255 if value > 175 else 0)
+    return [
+        gray,
+        binary_125,
+        binary_150,
+        ImageOps.invert(binary_175),
+    ]
