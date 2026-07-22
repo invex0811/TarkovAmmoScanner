@@ -78,6 +78,8 @@ class ScannerApplication:
             self.bridge.scan_failed.emit("База патронов ещё не загружена")
             return
 
+        # Do not let a previous result card become part of the next screenshot.
+        self.overlay.hide()
         self.window.set_last_scan("Последнее сканирование: обработка снимка...")
 
         def worker() -> None:
