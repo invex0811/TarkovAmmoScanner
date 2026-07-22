@@ -19,6 +19,12 @@ function Find-Tesseract {
     return $null
 }
 
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$venvDir = Join-Path $projectRoot ".venv"
+$venvPython = Join-Path $venvDir "Scripts\python.exe"
+$requirements = Join-Path $projectRoot "requirements.txt"
+$localTessdata = Join-Path $projectRoot "local-data\tessdata"
+
 $python = $null
 if (Get-Command py.exe -ErrorAction SilentlyContinue) {
     $python = "py"
@@ -33,12 +39,11 @@ if (-not $python) {
 Write-Host "Using Python:" -ForegroundColor Cyan
 & $python --version
 
-if (-not (Test-Path -LiteralPath ".\.venv\Scripts\python.exe")) {
+if (-not (Test-Path -LiteralPath $venvPython)) {
     Write-Host "Creating virtual environment..." -ForegroundColor Cyan
-    & $python -m venv .venv
+    & $python -m venv $venvDir
 }
 
-$venvPython = ".\.venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $venvPython)) {
     throw "Virtual environment creation failed: $venvPython was not created."
 }
@@ -47,7 +52,7 @@ Write-Host "Upgrading pip..." -ForegroundColor Cyan
 & $venvPython -m pip install --upgrade pip
 
 Write-Host "Installing project dependencies..." -ForegroundColor Cyan
-& $venvPython -m pip install -r requirements.txt
+& $venvPython -m pip install -r $requirements
 
 $tesseract = Find-Tesseract
 if (-not $tesseract) {
@@ -59,23 +64,31 @@ if (-not $tesseract) {
     }
 }
 
-if ($tesseract) {
-    Write-Host "Tesseract: $tesseract" -ForegroundColor Green
-
-    $tessdata = Join-Path (Split-Path $tesseract) "tessdata"
-    $rus = Join-Path $tessdata "rus.traineddata"
-
-    if (-not (Test-Path -LiteralPath $rus)) {
-        Write-Host "Downloading the Russian OCR model..." -ForegroundColor Yellow
-        New-Item -ItemType Directory -Force -Path $tessdata | Out-Null
-        Invoke-WebRequest `
-            -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/rus.traineddata" `
-            -OutFile $rus
-    }
-} else {
+if (-not $tesseract) {
     Write-Host "Tesseract could not be installed automatically." -ForegroundColor Red
     Write-Host "Install it manually with:" -ForegroundColor Yellow
     Write-Host "winget install --id UB-Mannheim.TesseractOCR --exact"
+    exit 1
 }
 
+Write-Host "Tesseract: $tesseract" -ForegroundColor Green
+Write-Host "Preparing local OCR language models..." -ForegroundColor Cyan
+New-Item -ItemType Directory -Force -Path $localTessdata | Out-Null
+
+foreach ($language in @("eng", "rus")) {
+    $modelPath = Join-Path $localTessdata "$language.traineddata"
+    if (-not (Test-Path -LiteralPath $modelPath)) {
+        Write-Host "Downloading $language.traineddata..." -ForegroundColor Yellow
+        Invoke-WebRequest `
+            -UseBasicParsing `
+            -Uri "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/$language.traineddata" `
+            -OutFile $modelPath
+    }
+
+    if (-not (Test-Path -LiteralPath $modelPath)) {
+        throw "OCR model download failed: $modelPath"
+    }
+}
+
+Write-Host "Local tessdata: $localTessdata" -ForegroundColor Green
 Write-Host "Setup complete. Start the app with: .\run.ps1" -ForegroundColor Green
