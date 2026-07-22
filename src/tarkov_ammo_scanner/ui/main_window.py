@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
@@ -23,8 +22,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("Tarkov Ammo Scanner")
-        self.setMinimumSize(520, 335)
-        self.resize(590, 360)
+        self.setMinimumSize(520, 350)
+        self.resize(590, 375)
 
         central = QWidget()
         central.setStyleSheet("background: #202020; color: #eeeeee;")
@@ -55,16 +54,18 @@ class MainWindow(QMainWindow):
 
         self.database_status = QLabel("База патронов: загрузка...")
         self.ocr_status = QLabel("OCR: проверка...")
+        self.hotkey_status = QLabel("Горячие клавиши: регистрация...")
         self.last_scan_status = QLabel("Последнее сканирование: ещё не запускалось")
-        for label in (self.database_status, self.ocr_status, self.last_scan_status):
+        for label in (
+            self.database_status,
+            self.ocr_status,
+            self.hotkey_status,
+            self.last_scan_status,
+        ):
             label.setStyleSheet("font-size: 13px; border: none; background: transparent;")
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             status_layout.addWidget(label)
         layout.addWidget(status_frame)
-
-        hotkey = QLabel("Горячие клавиши:  Ctrl+Shift+A — сканировать   ·   Ctrl+Shift+D — тестовая карточка")
-        hotkey.setStyleSheet("color: #aebc8c; font-size: 12px;")
-        layout.addWidget(hotkey)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
@@ -106,6 +107,12 @@ class MainWindow(QMainWindow):
     def set_ocr_status(self, text: str, ok: bool = True) -> None:
         self.ocr_status.setText(text)
         self.ocr_status.setStyleSheet(
+            f"font-size: 13px; border: none; background: transparent; color: {'#7fce75' if ok else '#e18d75'};"
+        )
+
+    def set_hotkey_status(self, text: str, ok: bool = True) -> None:
+        self.hotkey_status.setText(text)
+        self.hotkey_status.setStyleSheet(
             f"font-size: 13px; border: none; background: transparent; color: {'#7fce75' if ok else '#e18d75'};"
         )
 
