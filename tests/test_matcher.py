@@ -182,7 +182,9 @@ def test_runtime_acceptance_rules() -> None:
         runner_up_score=62.0,
         has_valid_caliber=False,
         has_designator_match=False,
+        tracer_conflict=False,
     )
+
     accepted, err = is_acceptable_match(low_confidence_result)
     assert accepted is False
     assert "Неоднозначное" in err or "Низкая уверенность" in err
@@ -305,10 +307,85 @@ def test_designation_similarity_65_safety_and_negative_scenarios() -> None:
         recognized_text="7.62x51mm ambiguous",
         has_valid_caliber=True,
         has_designator_match=False,
+        tracer_conflict=False,
     )
     assert is_acceptable_match(ambiguous_result)[0] is False
+
 
     # 9. Empty or garbage OCR text is rejected
     assert is_acceptable_match(match_ammo("", items))[0] is False
     assert is_acceptable_match(match_ammo("   ", items))[0] is False
     assert is_acceptable_match(match_ammo("[] / ---", items))[0] is False
+
+
+def test_real_live_scan_log_record_21_rejection_on_multi_ammo_line() -> None:
+    items = [
+        ammo("5.45x39мм ППБС гс \"Игольник\"", "ППБС", "Caliber545x39"),
+        ammo("5.56x45mm M995", "M995", "Caliber556x45NATO"),
+        ammo("5.56x45mm M856A1", "M856A1", "Caliber556x45NATO", tracer=True),
+    ]
+
+    # Real OCR line recorded in scans.jsonl Record 21: '856A: 3.90X45MM MOSBAL M935 ППБС ППБС\nshi'
+    raw_ocr_from_log_21 = "856A: 3.90X45MM MOSBAL     M935              ППБС     ППБС\nshi"
+    result = match_ammo(raw_ocr_from_log_21, items)
+
+    assert result is not None
+    assert result.designator_conflict is True or result.caliber_conflict is True
+
+    accepted, error_reason = is_acceptable_match(result)
+    assert accepted is False
+    assert "Несоответствие" in error_reason or "Неоднозначное" in error_reason
+
+
+def test_ppbs_and_m995_acceptance_rules_and_conflict_handling() -> None:
+    items = [
+        ammo('5.45x39мм ППБС гс "Игольник"', "ППБС", "Caliber545x39"),
+        ammo("5.56x45mm M995", "M995", "Caliber556x45NATO"),
+        ammo("5.56x45mm M856A1", "M856A1", "Caliber556x45NATO", tracer=True),
+    ]
+
+    # 1. Single 5.45x39 PPBS is accepted with valid caliber and no conflicts
+    r_ppbs = match_ammo("5.45x39mm ППБС", items)
+    assert r_ppbs is not None
+    assert r_ppbs.ammo.short_name == "ППБС"
+    assert r_ppbs.has_valid_caliber is True
+    assert r_ppbs.designator_conflict is False
+    assert r_ppbs.is_designator_applicable is False
+    accepted_ppbs, _ = is_acceptable_match(r_ppbs)
+    assert accepted_ppbs is True
+
+
+    # 2. Single 5.56x45 M995 is accepted with designator match
+    r_m995 = match_ammo("5.56x45mm M995", items)
+    assert r_m995 is not None
+    assert r_m995.ammo.short_name == "M995"
+    assert r_m995.has_valid_caliber is True
+    assert r_m995.has_designator_match is True
+    assert r_m995.is_designator_applicable is True
+    accepted_m995, _ = is_acceptable_match(r_m995)
+    assert accepted_m995 is True
+
+    # 3. Multi-item OCR line from record 21 is rejected due to conflict
+    r_rec21 = match_ammo("856A: 3.90X45MM MOSBAL     M935              ППБС     ППБС\nshi", items)
+    assert r_rec21 is not None
+    assert r_rec21.designator_conflict is True or r_rec21.caliber_conflict is True
+    accepted_rec21, _ = is_acceptable_match(r_rec21)
+    assert accepted_rec21 is False
+
+    # 4. High score does NOT bypass caliber_conflict or designator_conflict
+    high_score_conflict = MatchResult(
+        ammo=items[0],  # PPBS
+        score=95.0,
+        runner_up_score=80.0,
+        recognized_text="5.45x39mm M995 PPBS",
+        has_valid_caliber=True,
+        has_designator_match=False,
+        tracer_conflict=False,
+        caliber_conflict=False,
+        designator_conflict=True,  # M995 in query, PPBS has no M995
+        is_designator_applicable=False,
+    )
+    assert is_acceptable_match(high_score_conflict)[0] is False
+
+    # 5. Absence of M-designator on Cyrillic ammo alone is NOT a designator_conflict
+    assert r_ppbs.designator_conflict is False

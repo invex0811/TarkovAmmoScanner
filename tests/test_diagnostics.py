@@ -37,6 +37,8 @@ def test_log_scan_result_writes_valid_jsonl(tmp_path: Path) -> None:
         has_valid_caliber=True,
         has_designator_match=True,
         tracer_conflict=False,
+        caliber_conflict=False,
+        designator_conflict=False,
     )
 
     record = log_scan_result(match, log_file=log_file)
@@ -55,6 +57,8 @@ def test_log_scan_result_writes_valid_jsonl(tmp_path: Path) -> None:
     assert payload["has_valid_caliber"] is True
     assert payload["has_designator_match"] is True
     assert payload["tracer_conflict"] is False
+    assert payload["caliber_conflict"] is False
+    assert payload["designator_conflict"] is False
     assert payload["accepted"] is True
     assert payload["rejection_reason"] == ""
     assert "last_scan.png" in payload["debug_image_path"]
@@ -83,6 +87,9 @@ def test_format_structured_features() -> None:
         has_valid_caliber=True,
         has_designator_match=True,
         tracer_conflict=False,
+        caliber_conflict=False,
+        designator_conflict=False,
+        is_designator_applicable=True,
     )
 
     text = format_structured_features(match)
@@ -94,3 +101,35 @@ def test_format_structured_features() -> None:
     assert "margin: 10%" in text
 
     assert format_structured_features(None) == "Признаки: нет данных"
+
+
+def test_format_structured_features_shows_na_for_cyrillic_ammo_without_designator() -> None:
+    cyrillic_ammo = Ammo(
+        id="ppbs",
+        name='5.45x39мм ППБС гс "Игольник"',
+        short_name="ППБС",
+        caliber="Caliber545x39",
+        damage=40,
+        penetration_power=62,
+        armor_damage=60,
+        fragmentation_chance=0.0,
+        initial_speed=890.0,
+        tracer=False,
+        image_url="",
+    )
+    match = MatchResult(
+        ammo=cyrillic_ammo,
+        score=96.0,
+        runner_up_score=82.0,
+        recognized_text="5.45x39mm ППБС",
+        has_valid_caliber=True,
+        has_designator_match=False,
+        tracer_conflict=False,
+        caliber_conflict=False,
+        designator_conflict=False,
+        is_designator_applicable=False,
+    )
+
+    text = format_structured_features(match)
+    assert "калибр: ✓" in text
+    assert "designator: n/a" in text

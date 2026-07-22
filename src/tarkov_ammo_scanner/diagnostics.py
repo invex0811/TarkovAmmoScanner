@@ -26,6 +26,9 @@ class ScanLogRecord:
     has_valid_caliber: bool
     has_designator_match: bool
     tracer_conflict: bool
+    caliber_conflict: bool
+    designator_conflict: bool
+    is_designator_applicable: bool
     accepted: bool
     rejection_reason: str
     debug_image_path: str
@@ -56,6 +59,9 @@ def log_scan_result(
             has_valid_caliber=False,
             has_designator_match=False,
             tracer_conflict=False,
+            caliber_conflict=False,
+            designator_conflict=False,
+            is_designator_applicable=True,
             accepted=False,
             rejection_reason="OCR не вернул подходящее название",
             debug_image_path=image_path_str,
@@ -74,6 +80,9 @@ def log_scan_result(
             has_valid_caliber=result.has_valid_caliber,
             has_designator_match=result.has_designator_match,
             tracer_conflict=result.tracer_conflict,
+            caliber_conflict=result.caliber_conflict,
+            designator_conflict=result.designator_conflict,
+            is_designator_applicable=result.is_designator_applicable,
             accepted=accepted,
             rejection_reason=rejection_reason,
             debug_image_path=image_path_str,
@@ -90,14 +99,25 @@ def format_structured_features(result: MatchResult | None) -> str:
     if result is None:
         return "Признаки: нет данных"
 
-    caliber_str = "✓" if result.has_valid_caliber else "✗"
-    designator_str = "✓" if result.has_designator_match else "✗"
+    caliber_str = "✓" if result.has_valid_caliber else ("конфликт" if result.caliber_conflict else "✗")
+
+    if result.has_designator_match:
+        designator_str = "✓"
+    elif result.designator_conflict:
+        designator_str = "конфликт"
+    elif not result.is_designator_applicable:
+        designator_str = "n/a"
+    else:
+        designator_str = "✗"
+
     tracer_str = "конфликт" if result.tracer_conflict else "ok"
 
     return (
         f"Признаки: калибр: {caliber_str} · designator: {designator_str} · "
         f"tracer: {tracer_str} · score: {result.score:.0f}% · margin: {result.margin:.0f}%"
     )
+
+
 
 
 def open_diagnostics_folder() -> None:

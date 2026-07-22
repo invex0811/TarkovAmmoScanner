@@ -8,19 +8,23 @@ from rapidfuzz import fuzz
 from tarkov_ammo_scanner.models import Ammo
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class MatchResult:
     ammo: Ammo
     score: float
+    runner_up_score: float
     recognized_text: str
-    runner_up_score: float = 0.0
-    has_valid_caliber: bool = False
-    has_designator_match: bool = False
-    tracer_conflict: bool = False
+    has_valid_caliber: bool
+    has_designator_match: bool
+    tracer_conflict: bool
+    caliber_conflict: bool = False
+    designator_conflict: bool = False
+    is_designator_applicable: bool = True
 
     @property
     def margin(self) -> float:
         return self.score - self.runner_up_score
+
 
 
 def is_acceptable_match(result: MatchResult | None) -> tuple[bool, str]:
@@ -29,6 +33,12 @@ def is_acceptable_match(result: MatchResult | None) -> tuple[bool, str]:
 
     if result.tracer_conflict:
         return False, "Несоответствие маркера трассера"
+
+    if result.caliber_conflict:
+        return False, "Несоответствие калибра в распознанном тексте"
+
+    if result.designator_conflict:
+        return False, "Несоответствие дезигнатора в распознанном тексте"
 
     # High confidence general match
     if result.score >= 72.0 and result.margin >= 6.0:
@@ -149,6 +159,10 @@ def match_ammo(text: str, items: list[Ammo] | tuple[Ammo, ...]) -> MatchResult |
     )
     tracer_conflict = bool(query_tracer and not best_ammo.tracer)
 
+    caliber_conflict = bool(query_caliber and query_caliber != best_caliber)
+    designator_conflict = bool(query_designators) and not has_designator_match
+    is_designator_applicable = bool(best_designators)
+
     return MatchResult(
         ammo=best_ammo,
         score=best_score,
@@ -157,7 +171,11 @@ def match_ammo(text: str, items: list[Ammo] | tuple[Ammo, ...]) -> MatchResult |
         has_valid_caliber=has_valid_caliber,
         has_designator_match=has_designator_match,
         tracer_conflict=tracer_conflict,
+        caliber_conflict=caliber_conflict,
+        designator_conflict=designator_conflict,
+        is_designator_applicable=is_designator_applicable,
     )
+
 
 
 
