@@ -52,7 +52,8 @@ class ScannerApplication:
             on_scan=self.bridge.scan_requested.emit,
             on_demo=self.bridge.demo_requested.emit,
         )
-        self.hotkeys.start()
+        hotkeys_ok = self.hotkeys.start()
+        self.window.set_hotkey_status(self.hotkeys.status_text(), ok=hotkeys_ok)
         self.qt_app.aboutToQuit.connect(self.shutdown)
 
         self._update_ocr_status()
