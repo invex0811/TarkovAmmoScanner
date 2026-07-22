@@ -34,9 +34,8 @@ _REPLACEMENTS = str.maketrans(
     }
 )
 
-# Common Tesseract substitutions inside ammunition designations.  This is used
-# only as an additional comparison form; the original normalized text remains
-# available, so ordinary words are not permanently rewritten as digits.
+# Common Tesseract substitutions inside ammunition designations. This form is
+# used only in addition to the original OCR text.
 _OCR_CONFUSABLES = str.maketrans(
     {
         "o": "0",
@@ -52,6 +51,7 @@ _OCR_CONFUSABLES = str.maketrans(
 )
 
 _TOKEN_RE = re.compile(r"[0-9a-zа-я.+\-/]{1,}", re.IGNORECASE)
+_M_DESIGNATOR_RE = re.compile(r"m\d{2,3}", re.IGNORECASE)
 
 
 def normalize(text: str) -> str:
@@ -71,10 +71,33 @@ def match_ammo(text: str, items: list[Ammo] | tuple[Ammo, ...]) -> MatchResult |
         return None
 
     query_tokens = _query_tokens(query)
-    ranked: list[tuple[float, Ammo]] = []
+    query_caliber = _query_caliber_signature(query)
+    query_designators = _designators(query)
+    query_tracer = _mentions_tracer(query)
 
-    for ammo in items:
-        score = _score_ammo(query, query_tokens, ammo)
+    candidate_items = list(items)
+    if query_caliber:
+        same_caliber = [
+            ammo
+            for ammo in candidate_items
+            if _caliber_signature(ammo.caliber, ammo.name) == query_caliber
+        ]
+        # Apply a hard caliber filter only when the OCR caliber maps to a real
+        # caliber present in the database. Garbled values such as 02x51 are
+        # ignored instead of filtering every valid candidate out.
+        if same_caliber:
+            candidate_items = same_caliber
+
+    ranked: list[tuple[float, Ammo]] = []
+    for ammo in candidate_items:
+        score = _score_ammo(
+            query,
+            query_tokens,
+            query_caliber,
+            query_designators,
+            query_tracer,
+            ammo,
+        )
         ranked.append((score, ammo))
 
     ranked.sort(key=lambda entry: entry[0], reverse=True)
@@ -104,32 +127,43 @@ def _query_tokens(query: str) -> set[str]:
     return tokens
 
 
-def _score_ammo(query: str, query_tokens: set[str], ammo: Ammo) -> float:
+def _score_ammo(
+    query: str,
+    query_tokens: set[str],
+    query_caliber: str,
+    query_designators: set[str],
+    query_tracer: bool,
+    ammo: Ammo,
+) -> float:
     short = compact(ammo.short_name)
     name = compact(ammo.name)
     caliber = _caliber_signature(ammo.caliber, ammo.name)
+    ammo_designators = _designators(f"{ammo.short_name} {ammo.name}")
 
     short_forms = {short, short.translate(_OCR_CONFUSABLES)} - {""}
     name_forms = {name, name.translate(_OCR_CONFUSABLES)} - {""}
 
     short_score = _token_similarity(query_tokens, short_forms)
     caliber_score = _caliber_similarity(query_tokens, caliber)
+    designation_score = _designation_similarity(query_designators, ammo_designators)
+
+    # Exact structured evidence is more trustworthy than generic fuzzy text.
+    exact_caliber = bool(query_caliber and caliber == query_caliber)
+    exact_designator = bool(query_designators & ammo_designators)
 
     # One- and two-character aliases are extremely unsafe with OCR noise. They
     # may only become plausible when the caliber is also recognized.
     if len(short) < 3:
-        if caliber_score < 82:
-            short_score = min(short_score, 52.0)
+        if not exact_caliber:
+            short_score = min(short_score, 45.0)
         else:
-            short_score = min(short_score, 78.0)
+            short_score = min(short_score, 70.0)
 
     exact_short = len(short) >= 3 and any(
         query_token == short_form
         for query_token in query_tokens
         for short_form in short_forms
     )
-    if exact_short:
-        return min(100.0, 96.0 + caliber_score * 0.04)
 
     full_score = 0.0
     for form in name_forms:
@@ -137,15 +171,31 @@ def _score_ammo(query: str, query_tokens: set[str], ammo: Ammo) -> float:
             continue
         full_score = max(full_score, float(fuzz.partial_ratio(compact(query), form)))
 
-    if short_score >= 78 and caliber_score >= 70:
+    if exact_designator and exact_caliber:
+        combined = 98.0
+    elif exact_designator:
+        combined = 93.0
+    elif designation_score >= 82 and exact_caliber:
+        combined = designation_score * 0.78 + 20.0
+    elif exact_short and exact_caliber:
+        combined = 96.0
+    elif exact_short:
+        combined = 91.0
+    elif short_score >= 78 and caliber_score >= 70:
         combined = short_score * 0.72 + caliber_score * 0.28
     elif short_score >= 82 and len(short) >= 4:
         combined = short_score * 0.90 + caliber_score * 0.10
     else:
-        combined = max(short_score, min(full_score, 84.0))
+        combined = max(short_score, min(full_score, 84.0), designation_score)
+
+    if exact_caliber:
+        combined += 1.5
+
+    if query_tracer:
+        combined += 1.5 if ammo.tracer else -12.0
 
     # Generic fuzzy matching is useful as a fallback for long names, but must
-    # never recreate the old 100% partial-match failure on tiny aliases.
+    # never recreate a perfect partial-match result on tiny aliases.
     if len(name) >= 8:
         generic = max(
             float(fuzz.WRatio(query, normalize(ammo.name))),
@@ -153,7 +203,7 @@ def _score_ammo(query: str, query_tokens: set[str], ammo: Ammo) -> float:
         )
         combined = max(combined, min(generic, 86.0))
 
-    return min(100.0, combined)
+    return max(0.0, min(100.0, combined))
 
 
 def _token_similarity(query_tokens: set[str], candidate_forms: set[str]) -> float:
@@ -166,8 +216,6 @@ def _token_similarity(query_tokens: set[str], candidate_forms: set[str]) -> floa
                 best = max(best, 100.0)
                 continue
 
-            # Compare similarly-sized tokens. This prevents a two-character
-            # candidate from matching perfectly inside a long noisy OCR line.
             if abs(len(query_token) - len(candidate)) <= max(2, len(candidate) // 3):
                 best = max(best, float(fuzz.ratio(query_token, candidate)))
 
@@ -176,17 +224,54 @@ def _token_similarity(query_tokens: set[str], candidate_forms: set[str]) -> floa
     return best
 
 
-def _caliber_signature(caliber: str, name: str) -> str:
-    raw = compact(caliber).replace("caliber", "")
-    match = re.search(r"\d{3,6}", raw)
-    if match:
-        digits = match.group(0)
-        if len(digits) >= 4:
-            return digits
+def _designators(text: str) -> set[str]:
+    found: set[str] = set()
+    for token in _TOKEN_RE.findall(normalize(text)):
+        raw = compact(token)
+        for form in {raw, raw.translate(_OCR_CONFUSABLES)}:
+            found.update(match.group(0) for match in _M_DESIGNATOR_RE.finditer(form))
+    return found
 
-    name_match = re.search(r"(\d)[.,]?(\d{1,2})x(\d{2})", normalize(name))
-    if name_match:
-        return "".join(name_match.groups())
+
+def _designation_similarity(query: set[str], candidate: set[str]) -> float:
+    if not query or not candidate:
+        return 0.0
+    if query & candidate:
+        return 100.0
+    return max(float(fuzz.ratio(left, right)) for left in query for right in candidate)
+
+
+def _mentions_tracer(text: str) -> bool:
+    normalized = normalize(text)
+    return "tracer" in normalized or "трасс" in normalized
+
+
+def _query_caliber_signature(query: str) -> str:
+    for form in (normalize(query), normalize(query).translate(_OCR_CONFUSABLES)):
+        match = re.search(
+            r"(?<!\d)(\d)[.,]?(\d{1,2})\s*x\s*(\d{2,3})(?!\d)",
+            form,
+        )
+        if match:
+            return "".join(match.groups())
+
+        compact_form = compact(form)
+        match = re.search(r"(?<!\d)(\d{3,4})x(\d{2,3})(?!\d)", compact_form)
+        if match:
+            return "".join(match.groups())
+    return ""
+
+
+def _caliber_signature(caliber: str, name: str) -> str:
+    raw = normalize(caliber).replace("caliber", "")
+    match = re.search(r"(\d{3,4})x(\d{2,3})", raw)
+    if match:
+        return "".join(match.groups())
+
+    for form in (normalize(name), normalize(name).translate(_OCR_CONFUSABLES)):
+        match = re.search(r"(\d)[.,]?(\d{1,2})\s*x\s*(\d{2,3})", form)
+        if match:
+            return "".join(match.groups())
     return ""
 
 
@@ -194,12 +279,10 @@ def _caliber_similarity(query_tokens: set[str], caliber: str) -> float:
     if not caliber:
         return 0.0
 
-    forms = {caliber, caliber.translate(_OCR_CONFUSABLES)}
     best = 0.0
     for token in query_tokens:
         digits = re.sub(r"[^0-9]", "", token)
         if len(digits) < 4:
             continue
-        for form in forms:
-            best = max(best, float(fuzz.partial_ratio(digits, form)))
+        best = max(best, float(fuzz.partial_ratio(digits, caliber)))
     return best
