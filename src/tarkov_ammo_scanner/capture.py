@@ -45,10 +45,13 @@ class ScreenCaptureService:
 def preprocess_for_ocr(image: Image.Image) -> list[Image.Image]:
     # The Tarkov title is normally either at the top of this capture or close to
     # its vertical middle, depending on whether the cursor is on the magnifier
-    # or directly on the text. Process both narrow line bands before the full
-    # screenshot so Tesseract is not distracted by item icons and quantities.
+    # or directly on the text. Process narrow title crops before full width so
+    # Tesseract is not distracted by item icons and quantities on the right.
     width, height = image.size
     top_band = image.crop((0, 0, width, min(height, 34)))
+
+    # Narrow crop isolating the title text from right-side status indicators
+    narrow_top_band = image.crop((0, 0, min(width, 360), min(height, 34)))
 
     middle_top = max(0, height // 2 - 18)
     middle_bottom = min(height, middle_top + 36)
@@ -56,6 +59,7 @@ def preprocess_for_ocr(image: Image.Image) -> list[Image.Image]:
 
     variants: list[Image.Image] = []
     for source, thresholds in (
+        (narrow_top_band, (125, 155)),
         (top_band, (125, 155)),
         (middle_band, (135,)),
         (image, (150,)),

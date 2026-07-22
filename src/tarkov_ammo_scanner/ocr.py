@@ -155,15 +155,21 @@ class OcrService:
 
 
 def _ocr_text_quality(text: str) -> float:
+    from tarkov_ammo_scanner.matcher import _designators, _query_caliber_signature
+
     normalized = text.casefold().replace("×", "x").replace("х", "x")
     corrected = normalized.translate(_OCR_CONFUSABLES)
-    forms = (normalized, corrected)
 
     score = 0.0
-    if any(re.search(r"\d[.,]?\d{1,2}\s*x\s*\d{2,3}", form) for form in forms):
+    caliber_sig = _query_caliber_signature(text)
+    if caliber_sig in {"76251", "76239", "76254", "54539", "55645", "5728", "4630", "12755", "12733", "12799", "2375", "939", "919", "918", "921", "114323", "4046"}:
         score += 120.0
-    if any(re.search(r"\bm\s*[0-9oqlisb]{2,3}\b", form) for form in forms):
+    elif any(re.search(r"\b\d[.,]?\d{1,2}\s*x\s*\d{2,3}\b", form) for form in (normalized, corrected)):
+        score += 30.0
+
+    if _designators(text) or any(re.search(r"\bm\s*[0-9oqlisb]{2,3}\b", form) for form in (normalized, corrected)):
         score += 75.0
+
     if "tracer" in normalized or "трасс" in normalized:
         score += 20.0
 

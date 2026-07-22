@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 from tarkov_ammo_scanner.api import AmmoRepository, demo_ammo
 from tarkov_ammo_scanner.capture import ScreenCaptureService
 from tarkov_ammo_scanner.hotkeys import GlobalHotkeyService
-from tarkov_ammo_scanner.matcher import match_ammo
+from tarkov_ammo_scanner.matcher import is_acceptable_match, match_ammo
 from tarkov_ammo_scanner.ocr import OcrService
 from tarkov_ammo_scanner.ui.main_window import MainWindow
 from tarkov_ammo_scanner.ui.overlay import OverlayWindow
@@ -87,19 +87,11 @@ class ScannerApplication:
                 image, position = self.capture.capture_title_near_cursor()
                 text = self.ocr.recognize(image)
                 result = match_ammo(text, self.repository.items)
-                if result is None:
-                    raise RuntimeError("OCR не вернул подходящее название")
-                if result.score < 72:
-                    raise RuntimeError(
-                        f"Низкая уверенность {result.score:.0f}%: {text!r}"
-                    )
-                if result.margin < 6:
-                    raise RuntimeError(
-                        "Неоднозначное распознавание: "
-                        f"лучший результат {result.ammo.short_name} "
-                        f"({result.score:.0f}%, отрыв {result.margin:.0f}%). "
-                        "Наведите курсор ближе к началу названия и повторите."
-                    )
+                acceptable, error_message = is_acceptable_match(result)
+                if not acceptable:
+                    raise RuntimeError(error_message)
+
+                assert result is not None
                 self.bridge.scan_complete.emit(
                     result.ammo,
                     position.x,
@@ -109,6 +101,7 @@ class ScannerApplication:
                 )
             except Exception as exc:
                 self.bridge.scan_failed.emit(str(exc))
+
 
         self.executor.submit(worker)
 

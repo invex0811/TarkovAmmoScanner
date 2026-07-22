@@ -14,10 +14,45 @@ class MatchResult:
     score: float
     recognized_text: str
     runner_up_score: float = 0.0
+    has_valid_caliber: bool = False
+    has_designator_match: bool = False
+    tracer_conflict: bool = False
 
     @property
     def margin(self) -> float:
         return self.score - self.runner_up_score
+
+
+def is_acceptable_match(result: MatchResult | None) -> tuple[bool, str]:
+    if result is None:
+        return False, "OCR не вернул подходящее название"
+
+    if result.tracer_conflict:
+        return False, "Несоответствие маркера трассера"
+
+    # High confidence general match
+    if result.score >= 72.0 and result.margin >= 6.0:
+        return True, ""
+
+    # Structured match with valid caliber, recognized designator, and solid margin
+    if (
+        result.has_valid_caliber
+        and result.has_designator_match
+        and result.score >= 50.0
+        and result.margin >= 8.0
+    ):
+        return True, ""
+
+    if result.margin < 6.0:
+        return (
+            False,
+            "Неоднозначное распознавание: "
+            f"лучший результат {result.ammo.short_name} "
+            f"({result.score:.0f}%, отрыв {result.margin:.0f}%). "
+            "Наведите курсор ближе к началу названия и повторите.",
+        )
+
+    return False, f"Низкая уверенность {result.score:.0f}%: {result.recognized_text!r}"
 
 
 _REPLACEMENTS = str.maketrans(
@@ -51,7 +86,7 @@ _OCR_CONFUSABLES = str.maketrans(
 )
 
 _TOKEN_RE = re.compile(r"[0-9a-zа-я.+\-/]{1,}", re.IGNORECASE)
-_M_DESIGNATOR_RE = re.compile(r"m\d{2,3}", re.IGNORECASE)
+_M_DESIGNATOR_RE = re.compile(r"m\d{2,3}[a-z0-9]*", re.IGNORECASE)
 
 
 def normalize(text: str) -> str:
@@ -103,12 +138,26 @@ def match_ammo(text: str, items: list[Ammo] | tuple[Ammo, ...]) -> MatchResult |
     ranked.sort(key=lambda entry: entry[0], reverse=True)
     best_score, best_ammo = ranked[0]
     runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
+
+    best_caliber = _caliber_signature(best_ammo.caliber, best_ammo.name)
+    best_designators = _designators(f"{best_ammo.short_name} {best_ammo.name}")
+
+    has_valid_caliber = bool(query_caliber and query_caliber == best_caliber)
+    has_designator_match = bool(query_designators & best_designators) or (
+        _designation_similarity(query_designators, best_designators) >= 70.0
+    )
+    tracer_conflict = bool(query_tracer and not best_ammo.tracer)
+
     return MatchResult(
         ammo=best_ammo,
         score=best_score,
         runner_up_score=runner_up,
         recognized_text=text.strip(),
+        has_valid_caliber=has_valid_caliber,
+        has_designator_match=has_designator_match,
+        tracer_conflict=tracer_conflict,
     )
+
 
 
 def _query_tokens(query: str) -> set[str]:
@@ -150,6 +199,7 @@ def _score_ammo(
     # Exact structured evidence is more trustworthy than generic fuzzy text.
     exact_caliber = bool(query_caliber and caliber == query_caliber)
     exact_designator = bool(query_designators & ammo_designators)
+    exact_short_token = bool(short and short in query_tokens)
 
     # One- and two-character aliases are extremely unsafe with OCR noise. They
     # may only become plausible when the caliber is also recognized.
@@ -191,8 +241,11 @@ def _score_ammo(
     if exact_caliber:
         combined += 1.5
 
+    if exact_short_token:
+        combined += 2.0
+
     if query_tracer:
-        combined += 1.5 if ammo.tracer else -12.0
+        combined += 2.0 if ammo.tracer else -12.0
 
     # Generic fuzzy matching is useful as a fallback for long names, but must
     # never recreate a perfect partial-match result on tiny aliases.
@@ -247,7 +300,26 @@ def _mentions_tracer(text: str) -> bool:
 
 
 def _query_caliber_signature(query: str) -> str:
-    for form in (normalize(query), normalize(query).translate(_OCR_CONFUSABLES)):
+    norm = normalize(query)
+    for form in (norm, norm.translate(_OCR_CONFUSABLES)):
+        # Robust caliber recognition accounting for common Tesseract artifacts
+        if re.search(r"(?<!\d)(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6|0ex[is1]?1?)\s*x\s*51(?!\d)", form):
+            return "76251"
+        if re.search(r"(?<!\d)(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6)\s*x\s*39(?!\d)", form):
+            return "76239"
+        if re.search(r"(?<!\d)(?:7[.,]?62|0[.,]?2|0[.,]?6|1[.,]?6)\s*x\s*54(?!\d)", form):
+            return "76254"
+        if re.search(r"(?<!\d)5[.,]?45\s*x\s*39(?!\d)", form):
+            return "54539"
+        if re.search(r"(?<!\d)5[.,]?56\s*x\s*45(?!\d)", form):
+            return "55645"
+        if re.search(r"(?<!\d)5[.,]?7\s*x\s*28(?!\d)", form):
+            return "5728"
+        if re.search(r"(?<!\d)4[.,]?6\s*x\s*30(?!\d)", form):
+            return "4630"
+        if re.search(r"(?<!\d)12[.,]?7\s*x\s*55(?!\d)", form):
+            return "12755"
+
         match = re.search(
             r"(?<!\d)(\d)[.,]?(\d{1,2})\s*x\s*(\d{2,3})(?!\d)",
             form,
