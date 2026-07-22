@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import shutil
 from pathlib import Path
@@ -19,19 +20,26 @@ class OcrService:
     def __init__(self) -> None:
         self.executable = self._find_tesseract()
         self.tessdata_dir = self._find_tessdata_dir()
+
         if self.executable:
             pytesseract.pytesseract.tesseract_cmd = self.executable
 
+        # Tesseract on Windows can treat quotes in --tessdata-dir as literal
+        # characters. Set the environment variable as a second, native way to
+        # locate the language models and pass a quote-free command-safe path.
+        if self.tessdata_dir:
+            os.environ["TESSDATA_PREFIX"] = str(self.tessdata_dir.resolve())
+
     @property
     def available(self) -> bool:
-        return bool(self.executable and self.tessdata_dir)
+        return bool(self.executable and self.tessdata_dir and self.languages())
 
     def languages(self) -> list[str]:
-        if not self.available:
+        if not self.executable or not self.tessdata_dir:
             return []
         try:
             return sorted(pytesseract.get_languages(config=self._tessdata_config()))
-        except pytesseract.TesseractError:
+        except (pytesseract.TesseractError, OSError):
             return []
 
     def recognize(self, image: Image.Image) -> str:
@@ -41,8 +49,14 @@ class OcrService:
             raise OcrUnavailableError("Модели Tesseract не найдены. Запустите scripts\\setup.ps1")
 
         available_languages = set(self.languages())
+        if not available_languages:
+            raise OcrUnavailableError(
+                f"Tesseract не смог загрузить модели из {self.tessdata_dir}. "
+                "Повторно запустите scripts\\setup.ps1"
+            )
+
         language = "rus+eng" if "rus" in available_languages and "eng" in available_languages else "eng"
-        if "eng" not in available_languages and available_languages:
+        if "eng" not in available_languages:
             language = next(iter(available_languages))
 
         texts: list[str] = []
@@ -51,7 +65,7 @@ class OcrService:
                 text = pytesseract.image_to_string(
                     variant,
                     lang=language,
-                    config=f'{self._tessdata_config()} --oem 3 --psm {psm}',
+                    config=f"{self._tessdata_config()} --oem 3 --psm {psm}",
                     timeout=8,
                 ).strip()
                 if text:
@@ -59,12 +73,32 @@ class OcrService:
 
         if not texts:
             return ""
+
         # Longer OCR output usually contains the complete inspection title;
         # the fuzzy matcher is robust to surrounding UI text.
         return max(texts, key=lambda text: (len(text), text.count(" ")))
 
     def _tessdata_config(self) -> str:
-        return f'--tessdata-dir "{self.tessdata_dir}"'
+        if not self.tessdata_dir:
+            return ""
+        return f"--tessdata-dir {self._command_safe_path(self.tessdata_dir)}"
+
+    @staticmethod
+    def _command_safe_path(path: Path) -> str:
+        resolved = path.resolve()
+
+        # pytesseract uses Windows command-line tokenization where quoted
+        # --tessdata-dir values may reach Tesseract with the quote characters
+        # still attached. A Windows short path avoids both quotes and spaces.
+        if os.name == "nt":
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = ctypes.windll.kernel32.GetShortPathNameW(  # type: ignore[attr-defined]
+                str(resolved), buffer, len(buffer)
+            )
+            if 0 < length < len(buffer):
+                return buffer.value.replace("\\", "/")
+
+        return resolved.as_posix()
 
     def _find_tessdata_dir(self) -> Path | None:
         candidates: list[Path] = [local_tessdata_dir()]
